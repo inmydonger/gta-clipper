@@ -32,6 +32,15 @@ FRAME_W, FRAME_H = 320, 180
 BAR_MIN = 0.10           # each letterbox bar covers at least 10% of the height
 LOUD_PERCENTILE = 0.90
 
+# Composite clip score (0-100). A component whose signal the video cannot have
+# (no heatmap on a new upload, no media pass) is left out and the rest are
+# reweighted, so a missing graph never drags a clip down.
+# ponytail: hand-set weights; re-fit them from posted-clip views (calibration log).
+SCORE_WEIGHTS = {"replay": 0.35, "reaction": 0.25, "ai": 0.25, "cutscene": 0.10, "action": 0.05}
+REACTIONS_FOR_FULL = 3       # reaction phrases in a clip that max that component
+CUTSCENE_SWEET = (20, 70)    # cutscene with the commentator around it
+CUTSCENE_FLAG_PCT = 70       # above: mostly Rockstar's footage, flag the clip
+
 # ponytail: phrase list, not a classifier. Add phrases the clipped streamers use.
 REACTION_PHRASES = [
     "wait wait", "no way", "did you see", "what is that", "what was that",
@@ -193,6 +202,58 @@ def window_signals(windows: List[dict], words: Optional[List[dict]] = None,
         if sig:
             out[w["id"]] = sig
     return out
+
+
+def clip_replay_heat(peaks: Optional[List[dict]], start: float, end: float) -> float:
+    """Highest replay peak (0..1) overlapping ``[start, end]``. Overlap, not
+    midpoint: a clip that opens a few seconds before a long peak still has it."""
+    return max((p["views"] / 100 for p in peaks or []
+                if p["start"] < end and p["end"] > start), default=0.0)
+
+
+def composite_score(ai_score, sig: dict, duration: float,
+                    have_replay: bool, have_media: bool):
+    """``(score 0-100, breakdown {component: 0-100}, flags [str])``."""
+    try:
+        ai = min(1.0, max(0.0, float(ai_score) / 100))
+    except (TypeError, ValueError):
+        ai = 0.0
+    parts = {"ai": ai, "reaction": min(1.0, sig.get("reactions", 0) / REACTIONS_FOR_FULL)}
+    if have_replay:
+        parts["replay"] = sig.get("replay_heat", 0.0)
+    pct = sig.get("cutscene_pct", 0)
+    if have_media:
+        lo, hi = CUTSCENE_SWEET
+        if pct >= lo:  # no cutscene is neutral: most easter eggs happen in free roam
+            parts["cutscene"] = 1.0 if pct <= hi else 0.3
+        # Loud seconds are the video's own top tenth: a clip with twice its
+        # share (20% of its length) maxes the action component.
+        parts["action"] = min(1.0, sig.get("loud_seconds", 0) / max(1.0, 0.2 * duration))
+    weight = sum(SCORE_WEIGHTS[k] for k in parts)
+    score = round(100 * sum(SCORE_WEIGHTS[k] * v for k, v in parts.items()) / weight)
+    breakdown = {k: round(v * 100) for k, v in parts.items()}
+    flags = ["mostly_cutscene"] if pct > CUTSCENE_FLAG_PCT else []
+    return score, breakdown, flags
+
+
+def score_clips(shorts: List[dict], words=None, media=None, replay_peaks=None) -> None:
+    """Measure each clip's own signals and score it, in place.
+
+    ``ai_score`` keeps the model's number; ``predicted_score`` becomes the
+    composite, so everything downstream that ranks, sorts or shows a clip's
+    score (render order, the dashboard badge) uses it unchanged.
+    """
+    have_replay, have_media = bool(replay_peaks), bool(media)
+    for s in shorts:
+        a, b = float(s.get("start") or 0), float(s.get("end") or 0)
+        sig = window_signals([{"id": "c", "start": a, "end": b}], words, media).get("c", {})
+        heat = clip_replay_heat(replay_peaks, a, b)
+        if heat:
+            sig["replay_heat"] = round(heat, 2)
+        s["signals"] = sig
+        s["ai_score"] = s.get("predicted_score")
+        s["predicted_score"], s["score_breakdown"], s["flags"] = composite_score(
+            s["ai_score"], sig, b - a, have_replay, have_media)
 
 
 # --------------------------------------------------------------------------- #

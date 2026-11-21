@@ -2408,7 +2408,9 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None,
     gta-clipper: ``replay_peaks`` (``youtube_signals.replay_peaks_for_job``)
     and ``media`` (``youtube_signals.media_signals``) add per-window signals
     to both prompts; replay peaks also reserve shortlist slots, like viewer
-    clips. Each short carries its source window's signals as ``signals``.
+    clips. Each short then gets its own ``signals``, a composite
+    ``predicted_score`` with ``score_breakdown`` and ``flags``, and the
+    model's number as ``ai_score`` (``youtube_signals.score_clips``).
 
     Windowing gives even coverage on long videos (a single call over the whole
     transcript clusters picks near the start), and the cheap scoring pass keeps
@@ -2608,10 +2610,8 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None,
         if not shorts:
             print("⚠️ 2-pass returned no clips.")
             return None
-        for s in shorts:
-            sig = signals.get(str(s.get("source_window_id") or ""))
-            if sig:
-                s["signals"] = sig
+        if youtube_signals.ENABLED:
+            youtube_signals.score_clips(shorts, words, media, replay_peaks)
 
         result = {"shorts": shorts}
         if cost_analysis:
