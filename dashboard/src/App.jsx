@@ -42,6 +42,9 @@ import { JobPollError, pollFailureAction } from './lib/jobPoll';
 const SECRET_KEY = import.meta.env.VITE_ENCRYPTION_KEY || "OpenShorts-Static-Salt-Change-Me";
 const ENCRYPTION_PREFIX = "ENC:";
 
+// gta-clipper: tools this fork doesn't use (AI Shorts, UGC Gallery, YouTube Studio).
+const HIDDEN_TABS = new Set(['saasshorts', 'ugc-gallery', 'thumbnails']);
+
 const encrypt = (text) => {
   if (!text) return '';
   try {
@@ -1457,7 +1460,7 @@ function App() {
     { id: 'thumbnails', ord: '06', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
     ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '07', icon: History, label: 'History', short: 'history' }] : []),
     { id: 'settings', ord: '08', icon: Settings, label: 'Settings', short: 'settings' },
-  ];
+  ].filter((n) => !HIDDEN_TABS.has(n.id));
   const activeNav = navItems.find((n) => n.id === activeTab);
 
   // Escape closes the mobile drawer. The shell itself is overflow-hidden, so
