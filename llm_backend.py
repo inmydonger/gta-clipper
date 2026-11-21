@@ -35,6 +35,23 @@ DEFAULT_MODEL = "llama3.1:8b"
 CLAUDE_DEFAULT_MODEL = "sonnet"
 DEFAULT_TIMEOUT = 600.0  # local models on CPU are slow; a scoring batch can take minutes
 SYSTEM_PROMPT = "You answer with a single JSON object and nothing else."
+SKILL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "skills", "gta-clipper", "SKILL.md")
+
+
+def system_prompt() -> str:
+    """SYSTEM_PROMPT plus the clipping skill's body (frontmatter stripped), so
+    the niche rules ride every scoring/detail call on top of the generic
+    prompt. ``LLM_SKILL`` points at another skill file; ``LLM_SKILL=`` turns
+    it off."""
+    path = os.environ.get("LLM_SKILL", SKILL_PATH)
+    if not path or not os.path.isfile(path):
+        return SYSTEM_PROMPT
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    if text.startswith("---"):
+        text = text.split("---", 2)[2]
+    return f"{SYSTEM_PROMPT}\n\n{text.strip()}"
 
 
 def provider() -> str:
@@ -125,7 +142,7 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     url = f"{base_url()}/chat/completions"
     model = model or model_name()
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt()},
         {"role": "user", "content": prompt},
     ]
     last_rejection: Optional[str] = None
@@ -189,7 +206,7 @@ def _claude_cmd(schema: Type[BaseModel], model: str) -> list:
             "--strict-mcp-config",
             "--no-session-persistence",
             "--setting-sources", "",
-            "--system-prompt", SYSTEM_PROMPT]
+            "--system-prompt", system_prompt()]
 
 
 def _claude_json(prompt: str, schema: Type[BaseModel], model: str

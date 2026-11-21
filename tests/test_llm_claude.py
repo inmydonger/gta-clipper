@@ -83,3 +83,26 @@ def test_schema_violation_raises(claude, monkeypatch):
     _cli(monkeypatch, {"is_error": False, "structured_output": {"picks": [{"id": "w1"}]}})
     with pytest.raises(Exception, match="validation error"):
         llm_backend.generate_json("x", Picks)
+
+
+# --- the gta-clipper skill rides the system prompt -------------------------
+
+def test_skill_body_is_appended_without_frontmatter(claude, monkeypatch):
+    monkeypatch.delenv("LLM_SKILL", raising=False)
+    prompt = llm_backend.system_prompt()
+    assert prompt.startswith(llm_backend.SYSTEM_PROMPT)
+    assert "# GTA VI clipper" in prompt
+    assert "name: gta-clipper" not in prompt
+    seen = _cli(monkeypatch, {"is_error": False, "structured_output": {"picks": []}})
+    llm_backend.generate_json("x", Picks)
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--system-prompt") + 1] == prompt
+
+
+def test_skill_can_be_turned_off_or_swapped(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_SKILL", "")
+    assert llm_backend.system_prompt() == llm_backend.SYSTEM_PROMPT
+    other = tmp_path / "SKILL.md"
+    other.write_text("---\nname: x\n---\nCLIP CATS ONLY\n")
+    monkeypatch.setenv("LLM_SKILL", str(other))
+    assert llm_backend.system_prompt().endswith("CLIP CATS ONLY")
