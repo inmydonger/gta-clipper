@@ -40,6 +40,15 @@ Titles and descriptions follow the same pattern: they say GTA 6, name where the 
 
 Hashtags: #gta6 #gtavi plus one to three for the moment (#easteregg #vicecity #gtamystery #rockstargames).
 
+## Window signals
+
+Windows may carry measured signals next to their text. Weigh them in this order:
+
+1. `replay_heat` (0 to 1) and `replay_moments`: YouTube viewers rewound these stretches to watch again, the strongest evidence a find is on screen. A window with `replay_heat` 0.7+ is a strong candidate even when its words are thin; open the clip a few seconds before its replay moment.
+2. `reactions` and `reaction_times`: discovery phrases the commentator said. Start the clip just before the first reaction that leads to a find.
+3. `cutscene_pct`: share of the window spent in a letterboxed cutscene. Around 30 to 70 is a cutscene with the commentator around it, the shape that works. 70+ is mostly Rockstar's own footage: keep the clip to the stretch where the commentator talks.
+4. `loud_seconds` and `cuts_per_min`: action and noise. They support a moment the other signals found; on their own they mean little in this niche.
+
 ## Score calibration
 
 Both `score` and `predicted_score` reward the 2-second test plus a clear find:

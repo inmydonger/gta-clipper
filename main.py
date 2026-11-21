@@ -32,6 +32,7 @@ import layout_picker
 import llm_backend
 import yt_account
 import twitch_signals
+import youtube_signals
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             detail_plan, vision_targets,
@@ -2400,8 +2401,14 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
+def get_viral_clips(transcript_result, video_duration, viewer_clips=None,
+                    replay_peaks=None, media=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
+
+    gta-clipper: ``replay_peaks`` (``youtube_signals.replay_peaks_for_job``)
+    and ``media`` (``youtube_signals.media_signals``) add per-window signals
+    to both prompts; replay peaks also reserve shortlist slots, like viewer
+    clips. Each short carries its source window's signals as ``signals``.
 
     Windowing gives even coverage on long videos (a single call over the whole
     transcript clusters picks near the start), and the cheap scoring pass keeps
@@ -2462,6 +2469,10 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         heat = twitch_signals.window_heat(windows, viewer_clips) if viewer_clips else {}
         if heat:
             print(f"   👀 Viewer clips fall in {len(heat)} window(s).")
+        replay = twitch_signals.window_heat(windows, replay_peaks) if replay_peaks else {}
+        signals = youtube_signals.window_signals(windows, words, media, replay)
+        if signals:
+            print(f"   📡 Signals on {len(signals)} of {len(windows)} window(s).")
 
         def _payload(ws):
             out = []
@@ -2472,6 +2483,7 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
                     item["viewers_clipped"] = h["clips"]
                     item["viewer_clip_views"] = h["views"]
                     item["viewer_moments"] = h["spans"][:5]
+                item.update(signals.get(w["id"], {}))
                 out.append(item)
             return out
 
@@ -2499,6 +2511,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
             added = [w["id"] for w in shortlist if w["id"] not in before]
             if added:
                 print(f"   👀 Promoted {len(added)} window(s) viewers clipped: {added}")
+        if replay:
+            before = {w["id"] for w in shortlist}
+            ranked = [by_id[w["id"]] for w in scored if w.get("id") in by_id] or windows
+            shortlist = twitch_signals.promote_hot_windows(shortlist, ranked, replay, target)
+            added = [w["id"] for w in shortlist if w["id"] not in before]
+            if added:
+                print(f"   🔁 Promoted {len(added)} most-replayed window(s): {added}")
         print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
@@ -2589,6 +2608,10 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         if not shorts:
             print("⚠️ 2-pass returned no clips.")
             return None
+        for s in shorts:
+            sig = signals.get(str(s.get("source_window_id") or ""))
+            if sig:
+                s["signals"] = sig
 
         result = {"shorts": shorts}
         if cost_analysis:
@@ -2924,8 +2947,10 @@ if __name__ == '__main__':
     # without TWITCH_CLIENT_ID). A URL call, so it runs before the download and
     # the early pick below gets it too.
     viewer_clips = []
+    replay_peaks = []
     if args.url and not args.skip_analysis and not args.prepare_only:
         viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
+        replay_peaks = youtube_signals.replay_peaks_for_job(args.url)
 
     # 1. Get Input Video
     if args.url:
@@ -2956,7 +2981,11 @@ if __name__ == '__main__':
             try:
                 t = transcribe_video(audio_path)
                 early["transcript"] = t
-                if audio_duration and not speech_is_sparse(t, audio_duration):
+                # gta-clipper: the pick waits for the video when signals are
+                # on (cutscene/keyframe signals need it); the words still
+                # start early.
+                if (audio_duration and not speech_is_sparse(t, audio_duration)
+                        and not youtube_signals.ENABLED):
                     early["clips"] = get_viral_clips(t, audio_duration,
                                                      viewer_clips=viewer_clips)
             except Exception as e:
@@ -3169,7 +3198,9 @@ if __name__ == '__main__':
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
         elif transcript is not None:
-            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips)
+            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
+                                         replay_peaks=replay_peaks,
+                                         media=youtube_signals.media_signals(input_video))
         else:
             clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
 
