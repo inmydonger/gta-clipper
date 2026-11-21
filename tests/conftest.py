@@ -9,6 +9,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # variable, so this must be set here — before any test module imports app — or
 # the suite's behavior would depend on the developer's personal .env.
 os.environ["BILLING_ENABLED"] = "0"
+# gta-clipper: the same for the fork's local .env (Claude provider, M1
+# encoder). An empty value is "set", so load_dotenv leaves it alone and every
+# module falls back to upstream's default.
+for _name in ("LLM_PROVIDER", "LLM_MODEL", "LLM_SCORE_BATCH", "FFMPEG_ENCODER"):
+    os.environ[_name] = ""
 
 # The shared YouTube-account state (yt_account) lives in files: give the suite
 # its own directory and no pacing delay, so a test never waits on, or leaves a

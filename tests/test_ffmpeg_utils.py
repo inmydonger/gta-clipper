@@ -413,3 +413,27 @@ def test_no_nvenc_on_the_host_is_kept_without_retries(monkeypatch):
     for _ in range(3):
         assert video_encode_args(DELIVERY)[:2] == ["-c:v", "libx264"]
     assert len(calls) == 1 and sleeps == []
+
+
+# --- gta-clipper: VideoToolbox on Apple silicon ----------------------------
+
+def test_videotoolbox_args_per_tier(monkeypatch):
+    monkeypatch.setenv("FFMPEG_ENCODER", "videotoolbox")
+    monkeypatch.setattr(ffmpeg_utils, "videotoolbox_available", lambda: True)
+    assert video_encode_args(QUALITY) == [
+        "-c:v", "h264_videotoolbox", "-q:v", "80", "-pix_fmt", "yuv420p"]
+    assert video_encode_args(DELIVERY)[3] == "75"
+    assert video_encode_args(INTERMEDIATE)[3] == "85"
+
+
+def test_videotoolbox_falls_back_to_x264(monkeypatch):
+    monkeypatch.setenv("FFMPEG_ENCODER", "videotoolbox")
+    monkeypatch.setattr(ffmpeg_utils, "videotoolbox_available", lambda: False)
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "libx264"]
+
+
+def test_auto_never_picks_videotoolbox(monkeypatch):
+    monkeypatch.setenv("FFMPEG_ENCODER", "auto")
+    monkeypatch.setattr(ffmpeg_utils, "nvenc_available", lambda: False)
+    monkeypatch.setattr(ffmpeg_utils, "videotoolbox_available", lambda: True)
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "libx264"]

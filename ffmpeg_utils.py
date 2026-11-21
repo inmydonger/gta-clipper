@@ -4,6 +4,8 @@ FFMPEG_ENCODER env values:
   x264  (default) — CPU libx264, exact pre-GPU behavior
   nvenc           — force h264_nvenc; probed once and falls back to x264
                     (with a warning) if the GPU/driver is unavailable
+  videotoolbox    — h264_videotoolbox (Apple silicon media engine); probed
+                    once and falls back to x264 like nvenc
   auto            — h264_nvenc when the probe succeeds, else x264
 
 Only the codec/quality args live here; surrounding args (-movflags, -pix_fmt,
@@ -51,6 +53,18 @@ _NVENC_ARGS = {
                "-rc", "vbr", "-cq", "29", "-b:v", "0", "-spatial-aq", "1",
                "-pix_fmt", "yuv420p"],
 }
+
+# gta-clipper: VideoToolbox constant quality (-q:v, 1-100). Benchmarked on an
+# M1 against libx264 on 20 s of a 1080x1920 reframe: ~1 s of CPU instead of
+# ~41 s. It spends more bits for the same SSIM (q80: 0.9946 at 1.5x the size
+# of crf18; crf22 also scores 0.9946), so the intermediate cut, which is
+# encoded twice more, keeps more headroom. -pix_fmt for the same reason as
+# NVENC: the OpenCV pipe is bgr24.
+def _vt(q):
+    return ["-c:v", "h264_videotoolbox", "-q:v", str(q), "-pix_fmt", "yuv420p"]
+
+
+_VT_ARGS = {QUALITY: _vt(80), QUALITY_FAST: _vt(80), DELIVERY: _vt(75), INTERMEDIATE: _vt(85)}
 
 # Output args that drop container/stream metadata carried over from the source
 # — most notably YouTube's "produced by Google Inc." stream handler, which
@@ -247,13 +261,32 @@ def nvenc_available():
     return _nvenc_ok
 
 
+_vt_ok = None  # None = not probed yet
+
+
+def videotoolbox_available():
+    """One tiny lavfi encode through h264_videotoolbox, cached for the process."""
+    global _vt_ok
+    if _vt_ok is None:
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+               "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
+               "-c:v", "h264_videotoolbox", "-f", "null", "-"]
+        try:
+            _vt_ok = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=30).returncode == 0
+        except Exception:
+            _vt_ok = False
+    return _vt_ok
+
+
 def reset_encoder_cache():
     """Test hook: forget the cached probe result."""
-    global _nvenc_ok, _nvenc_reprobe_at, _announced
+    global _nvenc_ok, _nvenc_reprobe_at, _announced, _vt_ok
     with _probe_lock:
         _nvenc_ok = None
         _nvenc_reprobe_at = None
         _announced = False
+        _vt_ok = None
 
 
 def video_encode_args(tier=QUALITY):
@@ -263,18 +296,25 @@ def video_encode_args(tier=QUALITY):
         raise ValueError(f"Unknown encode tier: {tier!r}")
 
     mode = os.environ.get("FFMPEG_ENCODER", "x264").strip().lower()
-    use_nvenc = False
+    use_nvenc = use_vt = False
     if mode in ("nvenc", "auto"):
         use_nvenc = nvenc_available()
         if mode == "nvenc" and not use_nvenc:
             print("⚠️ [Encoder] FFMPEG_ENCODER=nvenc but h264_nvenc is not "
                   "usable here — falling back to libx264")
+    if mode == "videotoolbox":
+        use_vt = videotoolbox_available()
+        if not use_vt:
+            print("⚠️ [Encoder] FFMPEG_ENCODER=videotoolbox but h264_videotoolbox "
+                  "is not usable here — falling back to libx264")
 
     if not _announced:
         _announced = True
-        print(f"🎞️ [Encoder] video encoder: {'h264_nvenc' if use_nvenc else 'libx264'} "
-              f"(FFMPEG_ENCODER={mode})")
+        name = "h264_nvenc" if use_nvenc else "h264_videotoolbox" if use_vt else "libx264"
+        print(f"🎞️ [Encoder] video encoder: {name} (FFMPEG_ENCODER={mode})")
 
+    if use_vt:
+        return list(_VT_ARGS[tier])
     if use_nvenc and tier == INTERMEDIATE:
         return _intermediate_nvenc_args()
     if use_nvenc:
