@@ -25,18 +25,24 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from typing import Optional, Tuple, Type
 
 import httpx
 from pydantic import BaseModel
 
 DEFAULT_MODEL = "llama3.1:8b"
+CLAUDE_DEFAULT_MODEL = "sonnet"
 DEFAULT_TIMEOUT = 600.0  # local models on CPU are slow; a scoring batch can take minutes
+SYSTEM_PROMPT = "You answer with a single JSON object and nothing else."
 
 
 def provider() -> str:
-    """``"openai"`` when a compatible endpoint is configured, else ``"gemini"``."""
+    """``"claude"`` (headless Claude Code CLI, ``LLM_PROVIDER=claude``),
+    ``"openai"`` when a compatible endpoint is configured, else ``"gemini"``."""
     explicit = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
+    if explicit == "claude":
+        return "claude"
     if explicit in ("openai", "ollama", "local", "openai-compatible"):
         return "openai"
     if explicit == "gemini":
@@ -49,18 +55,21 @@ def base_url() -> str:
 
 
 def model_name() -> str:
-    return (os.environ.get("LLM_MODEL") or "").strip() or DEFAULT_MODEL
+    default = CLAUDE_DEFAULT_MODEL if provider() == "claude" else DEFAULT_MODEL
+    return (os.environ.get("LLM_MODEL") or "").strip() or default
 
 
 def active() -> bool:
-    """True when the moment picker should call the OpenAI-compatible server."""
-    return provider() == "openai" and bool(base_url())
+    """True when the moment picker should call this module instead of Gemini."""
+    return provider() == "claude" or (provider() == "openai" and bool(base_url()))
 
 
 def describe() -> Optional[dict]:
     """What ``/api/config`` tells the dashboard, or ``None`` when inactive."""
     if not active():
         return None
+    if provider() == "claude":
+        return {"provider": "claude", "model": model_name(), "baseUrl": "claude CLI"}
     return {"provider": "openai", "model": model_name(), "baseUrl": base_url()}
 
 
@@ -110,10 +119,13 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     """
     import gemini_worker  # local import: keeps this module free of the google SDK
 
+    if provider() == "claude":
+        return _claude_json(prompt, schema, model or model_name())
+
     url = f"{base_url()}/chat/completions"
     model = model or model_name()
     messages = [
-        {"role": "system", "content": "You answer with a single JSON object and nothing else."},
+        {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
     last_rejection: Optional[str] = None
@@ -158,6 +170,61 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
         "input_cost": 0.0,
         "output_cost": 0.0,
         "total_cost": 0.0,
+        "model": model,
+        "price_estimated": False,
+        "local": True,
+    }
+    return validated, cost
+
+
+def _claude_cmd(schema: Type[BaseModel], model: str) -> list:
+    """Headless Claude Code on the user's own plan: no tools, no MCP, no
+    user settings or hooks, no saved session. The prompt goes on stdin
+    (a long transcript would overflow argv)."""
+    return [os.environ.get("CLAUDE_BIN") or "claude", "-p",
+            "--output-format", "json",
+            "--json-schema", json.dumps(schema.model_json_schema()),
+            "--model", model,
+            "--tools", "",
+            "--strict-mcp-config",
+            "--no-session-persistence",
+            "--setting-sources", "",
+            "--system-prompt", SYSTEM_PROMPT]
+
+
+def _claude_json(prompt: str, schema: Type[BaseModel], model: str
+                 ) -> Tuple[dict, Optional[dict]]:
+    """``generate_json`` over ``claude -p``. Errors raise with the CLI's own
+    message, so main's retry policy sees 'overloaded' / '529' / '500' as
+    transient. A usage-limit hit is not transient: the job fails with the
+    CLI's reason, and the transcript checkpoint makes the rerun cheap.
+    ponytail: no wait-for-reset loop; add one if limit hits become routine."""
+    import gemini_worker
+
+    proc = subprocess.run(_claude_cmd(schema, model), input=prompt,
+                          capture_output=True, text=True, timeout=_timeout())
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        raise RuntimeError(f"claude CLI exit {proc.returncode}: "
+                           f"{(proc.stderr or proc.stdout)[:300]}")
+    if data.get("is_error"):
+        raise RuntimeError(f"claude CLI error: {str(data.get('result'))[:300]}")
+    parsed = data.get("structured_output")
+    if parsed is None:
+        parsed = gemini_worker._parse_json_response_text(data.get("result") or "")
+    validated = schema.model_validate(parsed).model_dump()
+
+    usage = data.get("usage") or {}
+    cost = {
+        "input_tokens": int(usage.get("input_tokens") or 0)
+        + int(usage.get("cache_read_input_tokens") or 0)
+        + int(usage.get("cache_creation_input_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "thinking_tokens": 0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "total_cost": 0.0,  # billed to the Claude plan, not per token
         "model": model,
         "price_estimated": False,
         "local": True,
