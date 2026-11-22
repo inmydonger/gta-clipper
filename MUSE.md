@@ -42,20 +42,28 @@ pip install -r requirements.txt
 
 ## 4. Config
 
-**You (Muse) are the moment picker**: no Gemini or other AI key is needed.
-The clipper sends its questions to you through files (see step 6).
+**You (Muse) are the moment picker**: the clipper sends its questions to you
+through files (see step 6). Keep `LLM_PROVIDER=agent` even when a Gemini key
+is set.
 
 Create `.env` in the repo root:
 
 ```
 LLM_PROVIDER=agent
 LLM_TIMEOUT=1800
+GEMINI_API_KEY=<key from the user, optional>
 FFMPEG_ENCODER=x264
 WHISPER_MODEL=base
 WHISPER_DEVICE=cpu
 WHISPER_COMPUTE=int8
 MAX_CONCURRENT_JOBS=1
 ```
+
+`GEMINI_API_KEY` is optional. It is used only for the steps that must see
+the video: AI layout picking, the on-screen content check and videos with no
+speech. Without it those fall back to the default layout or fail (no speech).
+Never print, log or commit the key. No key? Delete that line (don't leave the
+placeholder). After adding or changing it, restart the backend.
 
 `WHISPER_MODEL=base` keeps transcription inside 6 GB of RAM. Use `tiny` if a
 job is killed for running out of memory.
