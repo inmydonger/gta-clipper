@@ -2402,7 +2402,7 @@ def score_batch_size():
 
 
 def get_viral_clips(transcript_result, video_duration, viewer_clips=None,
-                    replay_peaks=None, media=None):
+                    replay_peaks=None, media=None, replay_curve=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     gta-clipper: ``replay_peaks`` (``youtube_signals.replay_peaks_for_job``)
@@ -2611,7 +2611,8 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None,
             print("⚠️ 2-pass returned no clips.")
             return None
         if youtube_signals.ENABLED:
-            youtube_signals.score_clips(shorts, words, media, replay_peaks)
+            youtube_signals.score_clips(shorts, words, media, replay_peaks,
+                                        replay_curve, video_duration)
 
         result = {"shorts": shorts}
         if cost_analysis:
@@ -2947,10 +2948,10 @@ if __name__ == '__main__':
     # without TWITCH_CLIENT_ID). A URL call, so it runs before the download and
     # the early pick below gets it too.
     viewer_clips = []
-    replay_peaks = []
+    replay_peaks, replay_curve = [], []
     if args.url and not args.skip_analysis and not args.prepare_only:
         viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
-        replay_peaks = youtube_signals.replay_peaks_for_job(args.url)
+        replay_peaks, replay_curve = youtube_signals.replay_for_job(args.url)
 
     # 1. Get Input Video
     if args.url:
@@ -3199,7 +3200,7 @@ if __name__ == '__main__':
             clips_data = early_clips
         elif transcript is not None:
             clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
-                                         replay_peaks=replay_peaks,
+                                         replay_peaks=replay_peaks, replay_curve=replay_curve,
                                          media=youtube_signals.media_signals(input_video))
         else:
             clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)

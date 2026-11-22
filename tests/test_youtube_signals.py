@@ -129,3 +129,14 @@ def test_no_cutscene_is_neutral_not_a_penalty():
     assert "cutscene" not in with_none[1]
     # ai .25*.8 + action .05*1 over .55 (reaction 0 at .25)
     assert with_none[0] == round(100 * (0.25 * 0.8 + 0.05) / 0.55)
+
+
+def test_heatmap_curve_is_midpoints_shifted_into_file_time():
+    curve = ys.heatmap_curve(_heat([0.2, 0.9, 0.4]), shift=10)
+    assert curve == [[5.0, 0.9], [15.0, 0.4]]      # first midpoint (5) - 10 < 0: dropped
+
+
+def test_score_clips_attaches_the_curve_within_the_file():
+    shorts = [{"start": 0, "end": 30, "predicted_score": 50}]
+    ys.score_clips(shorts, replay_curve=[[5, 0.3], [50, 0.9], [500, 1.0]], duration=100)
+    assert shorts[0]["source_replay"] == {"duration": 100.0, "points": [[5, 0.3], [50, 0.9]]}

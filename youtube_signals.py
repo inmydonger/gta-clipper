@@ -236,14 +236,22 @@ def composite_score(ai_score, sig: dict, duration: float,
     return score, breakdown, flags
 
 
-def score_clips(shorts: List[dict], words=None, media=None, replay_peaks=None) -> None:
+def score_clips(shorts: List[dict], words=None, media=None, replay_peaks=None,
+                replay_curve=None, duration=None) -> None:
     """Measure each clip's own signals and score it, in place.
 
     ``ai_score`` keeps the model's number; ``predicted_score`` becomes the
     composite, so everything downstream that ranks, sorts or shows a clip's
     score (render order, the dashboard badge) uses it unchanged.
+    ``source_replay`` carries the video's replay curve for the dashboard strip.
+    ponytail: one copy per clip (~1 KB) so app.py's five result builders stay
+    untouched; move it to the job result if videos ever carry many clips.
     """
     have_replay, have_media = bool(replay_peaks), bool(media)
+    source_replay = None
+    if replay_curve and duration:
+        source_replay = {"duration": round(float(duration), 1),
+                         "points": [p for p in replay_curve if p[0] <= duration]}
     for s in shorts:
         a, b = float(s.get("start") or 0), float(s.get("end") or 0)
         sig = window_signals([{"id": "c", "start": a, "end": b}], words, media).get("c", {})
@@ -254,6 +262,8 @@ def score_clips(shorts: List[dict], words=None, media=None, replay_peaks=None) -
         s["ai_score"] = s.get("predicted_score")
         s["predicted_score"], s["score_breakdown"], s["flags"] = composite_score(
             s["ai_score"], sig, b - a, have_replay, have_media)
+        if source_replay:
+            s["source_replay"] = source_replay
 
 
 # --------------------------------------------------------------------------- #
@@ -264,11 +274,25 @@ def _is_youtube(url) -> bool:
     return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
 
 
-def replay_peaks_for_job(url) -> List[dict]:
-    """Most-replayed peaks of a YouTube URL, in the time of the file clipped
-    (``SOURCE_START_SECONDS`` when ``MAX_SOURCE_MINUTES`` cuts a stretch)."""
+def heatmap_curve(heatmap, shift: float = 0.0) -> List[list]:
+    """``[[t, value], ...]`` at each segment's middle, shifted into the clipped
+    file's time; what the dashboard draws as the replay strip."""
+    out = []
+    for h in heatmap or []:
+        try:
+            t = (float(h["start_time"]) + float(h["end_time"])) / 2 - shift
+            out.append([round(t, 1), round(float(h["value"]), 2)])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return [p for p in out if p[0] >= 0]
+
+
+def replay_for_job(url):
+    """``(peaks, curve)`` of a YouTube URL's Most-replayed graph, in the time
+    of the file clipped (``SOURCE_START_SECONDS`` when ``MAX_SOURCE_MINUTES``
+    cuts a stretch). ``([], [])`` when there is none or it cannot be read."""
     if not ENABLED or not _is_youtube(url):
-        return []
+        return [], []
     try:
         import yt_dlp
         import ssrf_guard
@@ -277,16 +301,19 @@ def replay_peaks_for_job(url) -> List[dict]:
             info = ydl.extract_info(url, download=False)
     except Exception as e:  # bot check, network, private video: carry on without
         print(f"   ℹ️ Replay heatmap unavailable ({type(e).__name__}).")
-        return []
-    peaks = heatmap_peaks((info or {}).get("heatmap"), (info or {}).get("duration"))
+        return [], []
+    heatmap = (info or {}).get("heatmap")
+    peaks = heatmap_peaks(heatmap, (info or {}).get("duration"))
+    shift = 0.0
     if os.environ.get("MAX_SOURCE_MINUTES", "").strip():
         try:
-            peaks = shift_spans(peaks, float(os.environ.get("SOURCE_START_SECONDS", "0") or 0))
+            shift = float(os.environ.get("SOURCE_START_SECONDS", "0") or 0)
         except ValueError:
-            pass
+            shift = 0.0
+        peaks = shift_spans(peaks, shift)
     print(f"   🔁 Replay heatmap: {len(peaks)} peak(s)" if peaks
           else "   🔁 Replay heatmap: none (new or low-view video).")
-    return peaks
+    return peaks, heatmap_curve(heatmap, shift)
 
 
 def media_signals(video_path) -> dict:
