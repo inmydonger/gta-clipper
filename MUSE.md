@@ -21,7 +21,7 @@ No `sudo`? Report it to the user; ffmpeg and the libraries above are required.
 ## 2. Get the code
 
 ```bash
-git clone -b local-setup https://github.com/inmydonger/gta-clipper.git ~/gta-clipper
+git clone https://github.com/inmydonger/gta-clipper.git ~/gta-clipper
 cd ~/gta-clipper
 ```
 
