@@ -1764,7 +1764,7 @@ function App() {
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  Set a Gemini API key, or LLM_PROVIDER=claude in your .env, to use OpenShorts.
+                  Set a Gemini API key, or LLM_PROVIDER=claude or LLM_PROVIDER=agent in your .env, to use OpenShorts.
                 </span>
               </div>
             </div>

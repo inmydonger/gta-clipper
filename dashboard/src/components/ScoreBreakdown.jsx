@@ -4,7 +4,7 @@
 const PARTS = [
   ['replay', 'replay', 'YouTube viewers rewound this stretch (Most replayed)'],
   ['reaction', 'reactions', 'Commentator discovery phrases ("no way", "what is that"...)'],
-  ['ai', 'ai', "Claude's own judgement of the moment"],
+  ['ai', 'ai', "The moment picker's own judgement (Claude, Gemini or your agent)"],
   ['cutscene', 'cutscene', 'A cutscene with the commentator around it'],
   ['action', 'action', 'Loud moments, against the video’s own loudness'],
 ];
