@@ -42,15 +42,14 @@ pip install -r requirements.txt
 
 ## 4. Config
 
-The moment picker needs a **Google Gemini API key** (free tier works:
-https://aistudio.google.com/app/apikey). Ask the user for it. Never print it,
-log it or commit it.
+**You (Muse) are the moment picker**: no Gemini or other AI key is needed.
+The clipper sends its questions to you through files (see step 6).
 
 Create `.env` in the repo root:
 
 ```
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=<key from the user>
+LLM_PROVIDER=agent
+LLM_TIMEOUT=1800
 FFMPEG_ENCODER=x264
 WHISPER_MODEL=base
 WHISPER_DEVICE=cpu
@@ -90,9 +89,37 @@ curl -s -X POST http://localhost:8000/mcp \
 Use `tools/list` to see each tool's arguments. Typical loop:
 
 1. `process_video` with a YouTube URL; it returns a job id.
-2. `get_job_status` every ~60 s until it is done.
+2. While the job runs, every ~30 s: answer any waiting questions (below), then
+   `get_job_status`, until the job is done.
 3. `list_clips` to get the clips, scores and hooks. Clip files land in `output/`.
 4. Optional: `recut_clip`, `add_subtitles`.
+
+### Answering the clipper's questions
+
+After transcribing, the clipper asks you to rank moments and then to write
+the exact cuts, titles and hooks. Each question appears as a file:
+
+```bash
+ls ~/gta-clipper/agent_inbox/*.request.json
+```
+
+Each request is JSON with `system` (your instructions, including the GTA
+clipping rules), `prompt` (the transcript windows and the task) and `schema`
+(the JSON Schema your answer must match). For each one:
+
+1. Read it and do what `system` and `prompt` ask.
+2. Write your answer as a single JSON object matching `schema` to a temp file,
+   then rename it so the clipper never reads a half-written file:
+   ```bash
+   mv answer.tmp ~/gta-clipper/agent_inbox/<id>.response.json
+   ```
+   (`<id>` is the request's `id`: `abc123.request.json` → `abc123.response.json`.)
+3. The clipper deletes both files once it accepts the answer. If your answer
+   doesn't match the schema, the request stays; fix the response file.
+
+Unanswered for 30 minutes (`LLM_TIMEOUT`), a request is retried twice, then
+the job fails. Some features still need Gemini and are skipped without a
+key: AI layout picking and videos with no speech.
 
 **If the YouTube download fails with a bot check / "sign in to confirm"**:
 YouTube often blocks downloads from cloud servers. Don't try to get around it.

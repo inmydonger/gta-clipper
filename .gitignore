@@ -53,3 +53,4 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+agent_inbox/

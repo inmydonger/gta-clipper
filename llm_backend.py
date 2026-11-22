@@ -26,6 +26,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
+import uuid
 from typing import Optional, Tuple, Type
 
 import httpx
@@ -58,8 +60,8 @@ def provider() -> str:
     """``"claude"`` (headless Claude Code CLI, ``LLM_PROVIDER=claude``),
     ``"openai"`` when a compatible endpoint is configured, else ``"gemini"``."""
     explicit = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
-    if explicit == "claude":
-        return "claude"
+    if explicit in ("claude", "agent"):
+        return explicit
     if explicit in ("openai", "ollama", "local", "openai-compatible"):
         return "openai"
     if explicit == "gemini":
@@ -78,7 +80,7 @@ def model_name() -> str:
 
 def active() -> bool:
     """True when the moment picker should call this module instead of Gemini."""
-    return provider() == "claude" or (provider() == "openai" and bool(base_url()))
+    return provider() in ("claude", "agent") or (provider() == "openai" and bool(base_url()))
 
 
 def describe() -> Optional[dict]:
@@ -87,6 +89,8 @@ def describe() -> Optional[dict]:
         return None
     if provider() == "claude":
         return {"provider": "claude", "model": model_name(), "baseUrl": "claude CLI"}
+    if provider() == "agent":
+        return {"provider": "agent", "model": "agent", "baseUrl": agent_dir()}
     return {"provider": "openai", "model": model_name(), "baseUrl": base_url()}
 
 
@@ -138,6 +142,8 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
 
     if provider() == "claude":
         return _claude_json(prompt, schema, model or model_name())
+    if provider() == "agent":
+        return _agent_json(prompt, schema)
 
     url = f"{base_url()}/chat/completions"
     model = model or model_name()
@@ -246,4 +252,52 @@ def _claude_json(prompt: str, schema: Type[BaseModel], model: str
         "price_estimated": False,
         "local": True,
     }
+    return validated, cost
+
+
+def agent_dir() -> str:
+    return os.environ.get("LLM_AGENT_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "agent_inbox")
+
+
+def _agent_json(prompt: str, schema: Type[BaseModel], poll: float = 2.0
+                ) -> Tuple[dict, Optional[dict]]:
+    """``generate_json`` answered by an outside agent through files
+    (``LLM_PROVIDER=agent``): writes ``<id>.request.json`` (system, prompt,
+    JSON schema) into ``agent_dir()`` and waits up to ``LLM_TIMEOUT`` for the
+    agent to write ``<id>.response.json``. A half-written or invalid answer
+    keeps waiting, so the agent can fix it before the deadline.
+    ponytail: polls the folder; fine for one job at a time."""
+    inbox = agent_dir()
+    os.makedirs(inbox, exist_ok=True)
+    rid = uuid.uuid4().hex[:12]
+    req = os.path.join(inbox, f"{rid}.request.json")
+    resp = os.path.join(inbox, f"{rid}.response.json")
+    with open(req + ".tmp", "w", encoding="utf-8") as f:
+        json.dump({"id": rid, "system": system_prompt(), "prompt": prompt,
+                   "schema": schema.model_json_schema()}, f)
+    os.replace(req + ".tmp", req)
+    deadline = time.monotonic() + _timeout()
+    error = "no answer"
+    try:
+        while time.monotonic() < deadline:
+            if os.path.exists(resp):
+                try:
+                    with open(resp, encoding="utf-8") as f:
+                        validated = schema.model_validate(json.load(f)).model_dump()
+                    break
+                except Exception as e:  # partial write or wrong shape: wait for a fix
+                    error = f"invalid answer: {str(e)[:200]}"
+            time.sleep(poll)
+        else:
+            raise RuntimeError(f"agent did not answer {rid} within {_timeout():.0f}s ({error})")
+    finally:
+        for path in (req, resp):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    cost = {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0,
+            "input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0,
+            "model": "agent", "price_estimated": False, "local": True}
     return validated, cost
